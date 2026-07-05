@@ -1,9 +1,12 @@
 import { modern } from "@/lib/templates/modern";
+import { glass } from "@/lib/templates/glass";
+import { minimal } from "@/lib/templates/minimal";
+import { terminal } from "@/lib/templates/terminal";
+import { github } from "@/lib/templates/github";
 import type { Template, TemplateId } from "@/lib/templates/types";
 
 /**
- * Template registry — Phase 3 starts with just `modern`.
- * Phase 4 will add glass, minimal, terminal, github here.
+ * Template registry — Phase 4 includes all 5 templates.
  */
 class TemplateRegistry {
   private map = new Map<TemplateId, Template>();
@@ -27,5 +30,9 @@ class TemplateRegistry {
 
 const _registry = new TemplateRegistry();
 _registry.register(modern);
+_registry.register(glass);
+_registry.register(minimal);
+_registry.register(terminal);
+_registry.register(github);
 
 export const registry = _registry;
