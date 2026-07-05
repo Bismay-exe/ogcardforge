@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CardConfig, queryParamsToConfig, validateConfig } from "@/lib/config-schema";
-import { cache } from "@/lib/cache";
+import { cache, renderCache } from "@/lib/cache";
 import {
   fetchRepo,
   GitHubError,
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     ]);
   }
 
-  const cacheBefore = cache.stats();
+  const ghCacheBefore = cache.stats();
   let repoData: GithubRepoResponse | null = null;
   let fetchError: string | null = null;
 
@@ -49,12 +49,14 @@ export async function GET(request: NextRequest) {
     fetchError = err instanceof GitHubError ? err.message : String(err);
   }
 
-  const cacheAfter = cache.stats();
-  const cacheHit = cacheAfter.hits > cacheBefore.hits;
+  const ghCacheAfter = cache.stats();
+  const ghCacheHit = ghCacheAfter.hits > ghCacheBefore.hits;
 
   const githubData = repoData
     ? normalizeRepo(repoData)
     : emptyGithubData("repo", config.repo.owner);
+
+  const renderCacheBefore = renderCache.stats();
 
   if (searchParams.get("debug") === "json") {
     return NextResponse.json(
@@ -62,9 +64,10 @@ export async function GET(request: NextRequest) {
         config: validation.config,
         githubData,
         fetchError,
-        cache: { hit: cacheHit, stats: cacheAfter },
+        cache: { hit: ghCacheHit, stats: ghCacheAfter },
+        renderCache: { stats: renderCacheBefore },
       },
-      { status: 200, headers: { "Cache-Control": "no-store", "X-Cache": cacheHit ? "HIT" : "MISS" } },
+      { status: 200, headers: { "Cache-Control": "no-store", "X-Cache": ghCacheHit ? "HIT" : "MISS" } },
     );
   }
 
@@ -73,9 +76,9 @@ export async function GET(request: NextRequest) {
   try {
     const result = await renderCard(validation.config, githubData, { format });
     if (result.format === "png" && result.png) {
-      return imageResponse(result.png, "image/png");
+      return imageResponse(result.png, "image/png", { "X-Cache": ghCacheHit ? "HIT" : "MISS", "X-Render-Cache": result.cacheHit ? "HIT" : "MISS" });
     }
-    return imageResponse(result.svg, "image/svg+xml; charset=utf-8");
+    return imageResponse(result.svg, "image/svg+xml; charset=utf-8", { "X-Cache": ghCacheHit ? "HIT" : "MISS", "X-Render-Cache": result.cacheHit ? "HIT" : "MISS" });
   } catch (err) {
     if (err instanceof UnknownTemplateError) {
       return errorResponse(err.message, [{ path: "template", message: err.message }]);

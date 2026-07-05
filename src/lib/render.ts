@@ -4,14 +4,22 @@ import satori from "satori";
 import { Resvg } from "@resvg/resvg-js";
 import { registry } from "@/lib/templates/registry";
 import { loadFonts } from "@/lib/fonts";
+import { hashConfig } from "@/lib/hash";
+import { renderCache, type RenderedCacheEntry } from "@/lib/cache";
 import { UnknownTemplateError, type GitHubData } from "@/lib/templates/types";
 import type { CardConfig, Size } from "@/lib/config-schema";
 
 export interface RenderOptions {
   width?: number;
   height?: number;
-  /** When true, response is PNG (Buffer); otherwise SVG (string) */
   format?: "svg" | "png";
+}
+
+export interface RenderResult {
+  svg: string;
+  format: "svg" | "png";
+  png?: Buffer;
+  cacheHit: boolean;
 }
 
 const SIZE_DIMS: Record<Size, { width: number; height: number }> = {
@@ -26,17 +34,26 @@ export function getSizeDimensions(size: Size) {
 
 const FONT_DIR = path.join(process.cwd(), "public", "fonts");
 
-/**
- * Render a CardConfig + GitHubData into SVG (string) or PNG (Buffer).
- * Uses the template plugin registry's active template.
- */
 export async function renderCard(
   config: CardConfig,
   data: GitHubData,
   opts: RenderOptions = {},
-): Promise<{ svg: string; format: "svg" | "png"; png?: Buffer }> {
+): Promise<RenderResult> {
   const template = registry.get(config.template);
   if (!template) throw new UnknownTemplateError(config.template);
+
+  const format = opts.format ?? "svg";
+  const key = hashConfig(config, data, format);
+
+  const cached = renderCache.get<RenderedCacheEntry>(key);
+  if (cached) {
+    return {
+      svg: cached.svg,
+      format,
+      png: cached.png,
+      cacheHit: true,
+    };
+  }
 
   const dims = getSizeDimensions(config.size);
 
@@ -55,7 +72,8 @@ export async function renderCard(
     fonts: satoriFonts,
   });
 
-  if (opts.format === "png") {
+  let png: Buffer | undefined;
+  if (format === "png") {
     const resvg = new Resvg(svg, {
       fitTo: { mode: "width", value: opts.width ?? dims.width },
       font: {
@@ -68,9 +86,10 @@ export async function renderCard(
         loadSystemFonts: false,
       },
     });
-    const png = resvg.render().asPng();
-    return { svg, format: "png", png };
+    png = resvg.render().asPng();
   }
 
-  return { svg, format: "svg" };
+  renderCache.set<RenderedCacheEntry>(key, { svg, png });
+
+  return { svg, format, png, cacheHit: false };
 }

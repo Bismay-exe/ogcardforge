@@ -63,11 +63,13 @@ function createInMemoryCache(): Cache {
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Singleton cache instance used across all routes.
-// Replace with Vercel KV wrapper by swapping this export:
-//   import { createClient } from "@vercel/kv";
-//   export const cache = createVercelKvCache(process.env.KV_REST_API_URL, ...);
-// ─────────────────────────────────────────────────────────────────────────────
-
+// Singleton GitHub data cache instance
 export const cache = createInMemoryCache();
+
+// Singleton rendered image cache instance (separate stats, used by render.ts)
+export const renderCache = createInMemoryCache();
+
+export interface RenderedCacheEntry {
+  svg: string;
+  png?: Buffer;
+}
