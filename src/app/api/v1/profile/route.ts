@@ -10,6 +10,7 @@ function renderPlaceholder(config: CardConfig): string {
   const widths: Record<string, number> = { compact: 500, standard: 600, hero: 800 };
   const height = size === "hero" ? 280 : 200;
   const width = widths[size] || 600;
+  const username = config.repo?.owner || "You";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
@@ -22,11 +23,11 @@ function renderPlaceholder(config: CardConfig): string {
   <rect width="${width}" height="${height}" rx="${config.advanced?.radius ?? 16}" fill="url(#g)"/>
   <text x="${width / 2}" y="${height / 2 - 10}" dominant-baseline="middle" text-anchor="middle"
         font-family="system-ui, sans-serif" font-size="${size === "hero" ? 36 : 28}" font-weight="700" fill="${config.colors.title}">
-    ${config.repo ? `${config.repo.owner}/${config.repo.name}` : "OG Card"}
+    @${username}
   </text>
   <text x="${width / 2}" y="${height / 2 + 25}" dominant-baseline="middle" text-anchor="middle"
         font-family="system-ui, sans-serif" font-size="${size === "hero" ? 18 : 14}" fill="${config.colors.description}">
-    Template: ${template}
+    Profile Card · Template: ${template}
   </text>
 </svg>`;
 }
@@ -63,28 +64,28 @@ function errorResponse(
   });
 }
 
-function debugResponse(data: Record<string, unknown>): NextResponse {
-  return NextResponse.json(data, {
-    status: 200,
-    headers: { "Cache-Control": "no-store" },
-  });
-}
-
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
+  const raw = queryParamsToConfig(searchParams);
+  const config: Partial<CardConfig> = { ...raw, cardType: "profile" };
 
-  if (searchParams.get("debug") === "json") {
-    const config = queryParamsToConfig(searchParams);
-    const validation = validateConfig(config);
-    if (!validation.success) {
-      return errorResponse("Invalid config", validation.errors);
-    }
-    return debugResponse({ config: validation.config });
+  if (!config.repo?.owner && !searchParams.get("username")) {
+    return errorResponse("username or owner query param is required for profile cards", [{
+      path: "owner",
+      message: "Provide ?username=yourname or ?owner=yourname",
+    }]);
   }
 
-  const config = queryParamsToConfig(searchParams);
-  const validation = validateConfig(config);
+  // Canonicalize: map username or owner -> repo.owner for unified lookup
+  if (!config.repo) {
+    config.repo = { owner: searchParams.get("username") ?? "", name: "" };
+  }
 
+  // Merge owner param if provided
+  const owner = searchParams.get("owner");
+  if (owner) config.repo.owner = owner;
+
+  const validation = validateConfig(config);
   if (!validation.success) {
     return errorResponse("Invalid configuration", validation.errors);
   }
@@ -112,14 +113,14 @@ export async function POST(request: NextRequest) {
     return errorResponse("Failed to parse request body as JSON");
   }
 
-  const validation = validateConfig(body);
+  const config: Partial<CardConfig> = { ...(body as CardConfig), cardType: "profile" };
+  const validation = validateConfig(config);
+
   if (!validation.success) {
     return errorResponse("Invalid configuration", validation.errors);
   }
 
   const svg = renderPlaceholder(validation.config);
-
-  // POST format comes from query param, not from config body
   const format = request.nextUrl.searchParams.get("format") ?? "svg";
 
   if (format === "png") {
