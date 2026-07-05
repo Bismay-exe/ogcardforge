@@ -1,3 +1,5 @@
+import { cache } from "@/lib/cache";
+
 const GITHUB_API_BASE = "https://api.github.com";
 
 export class GitHubError extends Error {
@@ -102,7 +104,12 @@ export type GithubRepoResponse = {
 };
 
 export async function fetchRepo(owner: string, name: string): Promise<GithubRepoResponse> {
-  return githubFetch<GithubRepoResponse>(`/repos/${owner}/${name}`);
+  const key = `gh:repos:${owner}/${name}`;
+  const cached = cache.get<GithubRepoResponse>(key);
+  if (cached) return cached;
+  const data = await githubFetch<GithubRepoResponse>(`/repos/${owner}/${name}`);
+  cache.set(key, data, 3600);
+  return data;
 }
 
 export type GithubUserResponse = {
@@ -117,7 +124,12 @@ export type GithubUserResponse = {
 };
 
 export async function fetchUser(username: string): Promise<GithubUserResponse> {
-  return githubFetch<GithubUserResponse>(`/users/${username}`);
+  const key = `gh:user:${username}`;
+  const cached = cache.get<GithubUserResponse>(key);
+  if (cached) return cached;
+  const data = await githubFetch<GithubUserResponse>(`/users/${username}`);
+  cache.set(key, data, 3600);
+  return data;
 }
 
 export type GithubRepoSummary = {
@@ -131,8 +143,13 @@ export async function listUserRepos(
   username: string,
   { signal }: FetchOptions = {},
 ): Promise<GithubRepoSummary[]> {
-  return githubFetch<GithubRepoSummary[]>(
+  const key = `gh:user_repos:${username}`;
+  const cached = cache.get<GithubRepoSummary[]>(key);
+  if (cached) return cached;
+  const data = await githubFetch<GithubRepoSummary[]>(
     `/users/${encodeURIComponent(username)}/repos?per_page=30&sort=pushed`,
     { signal },
   );
+  cache.set(key, data, 600); // 10 min — repo lists change more frequently
+  return data;
 }
