@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useReducer, useEffect, useMemo, useRef } from "react";
-import { configToQueryParams, validateConfig, type CardConfig, type Size } from "@/lib/config-schema";
+import { useState, useReducer, useEffect, useMemo, useRef, startTransition } from "react";
+import { configToQueryParams, validateConfig, configToJSON, jsonToConfig, type CardConfig, type Size } from "@/lib/config-schema";
 import { registry } from "@/lib/templates/registry";
 import { emptyGithubData } from "@/lib/templates/github-data";
-import type { GitHubData } from "@/lib/templates/types";
+import type { GitHubData, ControlSchema } from "@/lib/templates/types";
 import type { Template } from "@/lib/templates/types";
 
 type BuilderAction =
@@ -20,7 +20,13 @@ type BuilderAction =
   | { type: "SET_GITHUB_DATA"; data: GitHubData | null }
   | { type: "SET_LOADING"; value: boolean }
   | { type: "SET_REPO_LIST"; list: Array<{ name: string; description: string | null }> }
-  | { type: "RESET_TO_TEMPLATE_DEFAULTS"; template: Template; cardType: "repo" | "profile" };
+  | { type: "RESET_TO_TEMPLATE_DEFAULTS"; template: Template; cardType: "repo" | "profile" }
+  | { type: "SET_ADVANCED"; key: string; value: unknown }
+  | { type: "SET_FIELD"; group: "repository" | "owner" | "stats" | "metadata"; field: string; value: boolean }
+  | { type: "SET_VIEW_MODE"; value: "ui" | "advanced" | "json" }
+  | { type: "SET_JSON_TEXT"; value: string }
+  | { type: "SET_JSON_ERROR"; value: string | null }
+  | { type: "APPLY_JSON"; json: string };
 
 function reducer(state: { config: CardConfig; githubData: GitHubData | null; loading: boolean; repoList: Array<{ name: string; description: string | null }> }, action: BuilderAction) {
   switch (action.type) {
@@ -56,7 +62,7 @@ function reducer(state: { config: CardConfig; githubData: GitHubData | null; loa
       return { ...state, loading: action.value };
     case "SET_REPO_LIST":
       return { ...state, repoList: action.list };
-    case "RESET_TO_TEMPLATE_DEFAULTS":
+case "RESET_TO_TEMPLATE_DEFAULTS":
       return {
         ...state,
         config: {
@@ -67,6 +73,39 @@ function reducer(state: { config: CardConfig; githubData: GitHubData | null; loa
           advanced: { ...state.config.advanced, ...action.template.defaults.advanced },
         },
       };
+    case "SET_ADVANCED":
+      return {
+        ...state,
+        config: {
+          ...state.config,
+          advanced: { ...state.config.advanced, [action.key]: action.value },
+        },
+      };
+    case "SET_FIELD":
+      return {
+        ...state,
+        config: {
+          ...state.config,
+          fields: {
+            ...state.config.fields,
+            [action.group]: {
+              ...state.config.fields?.[action.group],
+              [action.field]: action.value,
+            },
+          },
+        },
+      };
+    case "SET_VIEW_MODE":
+    case "SET_JSON_TEXT":
+    case "SET_JSON_ERROR":
+      return state;
+    case "APPLY_JSON":
+      try {
+        const parsed = jsonToConfig(action.json);
+        return { ...state, config: parsed };
+      } catch {
+        return state;
+      }
     default:
       return state;
   }
@@ -141,11 +180,15 @@ export default function BuilderPage() {
   const [urlCopied, setUrlCopied] = useState(false);
   const [showRepoDropdown, setShowRepoDropdown] = useState(false);
   const [repoFilter, setRepoFilter] = useState("");
+  const [viewMode, setViewMode] = useState<"ui" | "advanced" | "json">("ui");
+  const [jsonText, setJsonText] = useState(() => configToJSON(initialConfig));
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { config, githubData, loading, repoList } = state;
   const cardType = config.cardType ?? "repo";
+  const activeTemplate = templates.find((t) => t.id === config.template) ?? initialTemplate;
 
   const ghData = githubData ?? emptyGithubData(cardType, config.repo?.owner ?? "");
 
@@ -200,6 +243,12 @@ export default function BuilderPage() {
     return () => clearTimeout(ticket);
   }, [config.repo?.owner, config.repo?.name, cardType]);
 
+  useEffect(() => {
+    startTransition(() => {
+      setJsonText(configToJSON(config));
+    });
+  }, [config]);
+
   const handleCopyUrl = async () => {
     const url = shareableUrl;
     try {
@@ -208,6 +257,17 @@ export default function BuilderPage() {
       setTimeout(() => setUrlCopied(false), 2000);
     } catch {
       // fallback — user selects manually
+    }
+  };
+
+  const handleApplyJson = () => {
+    setJsonError(null);
+    try {
+      const parsed = jsonToConfig(jsonText);
+      dispatch({ type: "APPLY_JSON", json: jsonText });
+      void parsed;
+    } catch (err) {
+      setJsonError(String(err));
     }
   };
 
@@ -231,6 +291,23 @@ export default function BuilderPage() {
       <div className="mx-auto flex max-w-[1440px] flex-col gap-6 px-6 py-8 lg:flex-row">
         {/* ── Controls Panel ── */}
         <div className="flex w-full flex-col gap-5 lg:w-[420px] lg:flex-shrink-0">
+          {/* View Mode Toggle */}
+          <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
+            {(["ui", "advanced", "json"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
+                  viewMode === mode
+                    ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+                    : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                }`}
+              >
+                {mode === "ui" ? "Simple" : mode}
+              </button>
+            ))}
+          </div>
+
           {/* Section: Card Type */}
           <section>
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">Card Type</h2>
@@ -408,6 +485,84 @@ export default function BuilderPage() {
               ))}
             </div>
           </section>
+        {viewMode !== "json" && (
+          <>
+            <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-400">Template Controls</h2>
+              <div className="flex flex-col gap-3">
+                {(activeTemplate.controls as ControlSchema[]).map((ctrl: ControlSchema) => {
+                  if (ctrl.type === "slider") {
+                    const val = (config.advanced?.[ctrl.key] as number) ?? ctrl.default;
+                    return (
+                      <div key={ctrl.key} className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-medium capitalize text-zinc-600 dark:text-zinc-300">{ctrl.key}</label>
+                          <span className="text-[11px] font-mono text-zinc-400">{val}</span>
+                        </div>
+                        <input type="range" min={ctrl.min} max={ctrl.max} step={ctrl.step} value={val} onChange={(e) => dispatch({ type: "SET_ADVANCED", key: ctrl.key, value: Number(e.target.value) })} className="w-full accent-zinc-900" />
+                      </div>
+                    );
+                  }
+                  if (ctrl.type === "select") {
+                    const val = (config.advanced?.[ctrl.key] as string) ?? ctrl.default;
+                    return (
+                      <div key={ctrl.key} className="flex flex-col gap-1">
+                        <label className="text-xs font-medium capitalize text-zinc-600 dark:text-zinc-300">{ctrl.key}</label>
+                        <select value={val} onChange={(e) => dispatch({ type: "SET_ADVANCED", key: ctrl.key, value: e.target.value })} className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-900">
+                          {ctrl.options.map((opt) => <option key={String(opt)} value={String(opt)}>{opt}</option>)}
+                        </select>
+                      </div>
+                    );
+                  }
+                  if (ctrl.type === "toggle") {
+                    const val = !!config.advanced?.[ctrl.key];
+                    return (
+                      <div key={ctrl.key} className="flex items-center justify-between">
+                        <label className="text-xs font-medium capitalize text-zinc-600 dark:text-zinc-300">{ctrl.key}</label>
+                        <button role="switch" aria-checked={val} onClick={() => dispatch({ type: "SET_ADVANCED", key: ctrl.key, value: !val })} className={`relative h-5 w-9 rounded-full transition-colors ${val ? "bg-zinc-900 dark:bg-zinc-100" : "bg-zinc-300 dark:bg-zinc-600"}`}>
+                          <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${val ? "translate-x-4" : ""}`} />
+                        </button>
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-400">Shown Fields</h2>
+              <div className="flex flex-col gap-3">
+                {(["repository", "owner", "stats", "metadata"] as const).map((group) => {
+                  const groupFields = config.fields?.[group] ?? {};
+                  const fieldEntries = Object.entries(groupFields);
+                  if (fieldEntries.length === 0) return null;
+                  return (
+                    <div key={group}>
+                      <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">{group}</h3>
+                      <div className="flex flex-wrap gap-1.5">
+                        {fieldEntries.map(([field, value]) => (
+                          <button key={field} onClick={() => dispatch({ type: "SET_FIELD", group, field, value: !value })} className={`rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${value ? "border-zinc-900 bg-zinc-900 text-zinc-100 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900" : "border-zinc-300 text-zinc-400 hover:border-zinc-400"}`}>
+                            {field}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </>
+        )}
+
+        {viewMode === "json" && (
+          <section className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">Card Config (JSON)</h2>
+            <textarea value={jsonText} onChange={(e) => { setJsonText(e.target.value); setJsonError(null); }} onBlur={handleApplyJson} className="w-full resize-y rounded-md border border-zinc-300 bg-zinc-50 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-700 outline-none focus:border-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-300" rows={18} spellCheck={false} />
+            {jsonError && <p className="mt-1.5 text-[11px] text-red-500">Parse error: {jsonError}</p>}
+            <p className="mt-2 text-[11px] text-zinc-400">Apply on blur. Changes sync back to the Simple/Advanced UI.</p>
+          </section>
+        )}
         </div>
 
         {/* ── Preview Panel ── */}
