@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useReducer, useEffect, useMemo, useRef, startTransition } from "react";
+import { Download, Upload, Check, AlertCircle } from "lucide-react";
 import { configToQueryParams, validateConfig, configToJSON, jsonToConfig, type CardConfig, type Size } from "@/lib/config-schema";
 import { registry } from "@/lib/templates/registry";
 import { presets } from "@/lib/presets";
@@ -197,8 +198,10 @@ export default function BuilderPage() {
   const [viewMode, setViewMode] = useState<"ui" | "advanced" | "json">("ui");
   const [jsonText, setJsonText] = useState(() => configToJSON(initialConfig));
   const [jsonError, setJsonError] = useState<string | null>(null);
+  const [importStatus, setImportStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const { config, githubData, loading, repoList } = state;
   const cardType = config.cardType ?? "repo";
@@ -285,6 +288,50 @@ export default function BuilderPage() {
     }
   };
 
+  const handleExport = () => {
+    const json = configToJSON(config, true);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `og-card-${config.template}-${config.repo?.owner ?? "profile"}-${config.repo?.name ?? ""}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setImportStatus({ ok: true, message: "Exported config" });
+    setTimeout(() => setImportStatus(null), 2000);
+  };
+
+  const handleImportClick = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result ?? "");
+        const parsed = jsonToConfig(text);
+        dispatch({ type: "APPLY_JSON", json: text });
+        setImportStatus({ ok: true, message: `Imported "${file.name}"` });
+        setTimeout(() => setImportStatus(null), 2500);
+        void parsed;
+      } catch (err) {
+        setImportStatus({ ok: false, message: `Invalid JSON: ${err instanceof Error ? err.message : String(err)}` });
+        setTimeout(() => setImportStatus(null), 4000);
+      }
+    };
+    reader.onerror = () => {
+      setImportStatus({ ok: false, message: "Failed to read file" });
+      setTimeout(() => setImportStatus(null), 4000);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
   const filteredRepos = repoList.filter((r) =>
     r.name.toLowerCase().includes(repoFilter.toLowerCase())
   );
@@ -294,11 +341,53 @@ export default function BuilderPage() {
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       <header className="border-b border-zinc-200 px-6 py-3 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-[1440px] items-center justify-between">
+        <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4">
           <span className="text-sm font-semibold tracking-tight">OG Card Builder</span>
-          <span className="rounded-full border border-zinc-300 px-2.5 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-            v0.2
-          </span>
+          <div className="flex items-center gap-2">
+            {importStatus && (
+              <span
+                role="status"
+                aria-live="polite"
+                className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium ${
+                  importStatus.ok
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                    : "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300"
+                }`}
+              >
+                {importStatus.ok ? <Check className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
+                {importStatus.message}
+              </span>
+            )}
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={handleImportChange}
+              className="hidden"
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              onClick={handleImportClick}
+              className="flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 transition hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+              title="Import config from .json file"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Import
+            </button>
+            <button
+              type="button"
+              onClick={handleExport}
+              className="flex items-center gap-1.5 rounded-md border border-zinc-900 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-100 transition hover:bg-zinc-700 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              title="Export current config as .json file"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export
+            </button>
+            <span className="rounded-full border border-zinc-300 px-2.5 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+              v0.2
+            </span>
+          </div>
         </div>
       </header>
 
