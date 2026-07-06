@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useReducer, useEffect, useMemo, useRef, startTransition } from "react";
-import { Download, Upload, Check, AlertCircle } from "lucide-react";
+import { Download, Upload, Check, AlertCircle, ImageIcon } from "lucide-react";
 import { configToQueryParams, validateConfig, configToJSON, jsonToConfig, type CardConfig, type Size } from "@/lib/config-schema";
 import { registry } from "@/lib/templates/registry";
 import { presets } from "@/lib/presets";
@@ -29,9 +29,18 @@ type BuilderAction =
   | { type: "SET_JSON_TEXT"; value: string }
   | { type: "SET_JSON_ERROR"; value: string | null }
   | { type: "APPLY_JSON"; json: string }
-  | { type: "APPLY_PRESET"; preset: { template: string; colors: { background: string; accent: string; title: string; description: string }; advanced?: Record<string, unknown> } };
+  | { type: "APPLY_PRESET"; preset: { template: string; colors: { background: string; accent: string; title: string; description: string }; advanced?: Record<string, unknown> } }
+  | { type: "SET_GITHUB_ERROR"; value: string | null };
 
-function reducer(state: { config: CardConfig; githubData: GitHubData | null; loading: boolean; repoList: Array<{ name: string; description: string | null }> }, action: BuilderAction) {
+type BuilderState = {
+  config: CardConfig;
+  githubData: GitHubData | null;
+  loading: boolean;
+  repoList: Array<{ name: string; description: string | null }>;
+  githubError: string | null;
+};
+
+function reducer(state: BuilderState, action: BuilderAction) {
   switch (action.type) {
     case "SET_CARD_TYPE":
       return { ...state, config: { ...state.config, cardType: action.value } };
@@ -65,7 +74,9 @@ function reducer(state: { config: CardConfig; githubData: GitHubData | null; loa
       return { ...state, loading: action.value };
     case "SET_REPO_LIST":
       return { ...state, repoList: action.list };
-case "RESET_TO_TEMPLATE_DEFAULTS":
+    case "SET_GITHUB_ERROR":
+      return { ...state, githubError: action.value };
+    case "RESET_TO_TEMPLATE_DEFAULTS":
       return {
         ...state,
         config: {
@@ -188,6 +199,7 @@ export default function BuilderPage() {
     githubData: null,
     loading: false,
     repoList: [],
+    githubError: null,
   });
 
   const [previewSvg, setPreviewSvg] = useState<string | null>(null);
@@ -199,11 +211,12 @@ export default function BuilderPage() {
   const [jsonText, setJsonText] = useState(() => configToJSON(initialConfig));
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [importStatus, setImportStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [downloadLoading, setDownloadLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
-  const { config, githubData, loading, repoList } = state;
+  const { config, githubData, loading, repoList, githubError } = state;
   const cardType = config.cardType ?? "repo";
   const activeTemplate = templates.find((t) => t.id === config.template) ?? initialTemplate;
 
@@ -251,9 +264,16 @@ export default function BuilderPage() {
     if (!owner || owner.length < 2) return;
 
     dispatch({ type: "SET_LOADING", value: true });
+    dispatch({ type: "SET_GITHUB_ERROR", value: null });
     const ticket = setTimeout(() => {
       fetchGitHubData(cardType, owner, config.repo?.name).then((data) => {
-        if (data) dispatch({ type: "SET_GITHUB_DATA", data });
+        if (data) {
+          dispatch({ type: "SET_GITHUB_DATA", data });
+          dispatch({ type: "SET_GITHUB_ERROR", value: null });
+        }
+        dispatch({ type: "SET_LOADING", value: false });
+      }).catch((err: unknown) => {
+        dispatch({ type: "SET_GITHUB_ERROR", value: err instanceof Error ? err.message : String(err) });
         dispatch({ type: "SET_LOADING", value: false });
       });
     }, 500);
@@ -330,6 +350,51 @@ export default function BuilderPage() {
     };
     reader.readAsText(file);
     e.target.value = "";
+  };
+
+  const handleDownloadSvg = () => {
+    if (!previewSvg) return;
+    const svgText = decodeURIComponent(previewSvg.replace("data:image/svg+xml,", ""));
+    const blob = new Blob([svgText], { type: "image/svg+xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `og-card-${config.template}-${config.repo?.owner ?? "profile"}-${config.repo?.name ?? ""}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadPng = async () => {
+    if (!config.repo?.owner) return;
+    setDownloadLoading(true);
+    try {
+      const params = configToQueryParams(config);
+      const endpoint = cardType === "profile"
+        ? `/api/v1/profile?${params.toString()}&format=png`
+        : `/api/v1/repo?${params.toString()}&format=png`;
+      const res = await fetch(endpoint);
+      if (!res.ok) {
+        setImportStatus({ ok: false, message: "PNG render failed" });
+        setTimeout(() => setImportStatus(null), 3000);
+        setDownloadLoading(false);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `og-card-${config.template}-${config.repo.owner}-${config.repo.name ?? ""}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      setImportStatus({ ok: false, message: "PNG download failed" });
+      setTimeout(() => setImportStatus(null), 3000);
+    }
+    setDownloadLoading(false);
   };
 
   const filteredRepos = repoList.filter((r) =>
@@ -513,6 +578,12 @@ export default function BuilderPage() {
                 </div>
               )}
             </div>
+            {githubError && (
+              <div className="mt-2 flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400" role="alert">
+                <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                <span>{githubError}</span>
+              </div>
+            )}
           </section>
 
           {/* Section: Presets */}
@@ -705,8 +776,28 @@ export default function BuilderPage() {
         <div className="flex flex-1 flex-col gap-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Preview</h2>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="text-[11px] text-zinc-400">{config.size} \u00b7 {config.template}</span>
+              <button
+                type="button"
+                onClick={handleDownloadSvg}
+                disabled={!previewSvg}
+                title="Download as SVG"
+                className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-600 transition hover:border-zinc-500 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              >
+                <ImageIcon className="h-3 w-3" />
+                SVG
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadPng}
+                disabled={downloadLoading || !config.repo?.owner}
+                title="Download as PNG"
+                className="flex items-center gap-1 rounded-md border border-zinc-900 bg-zinc-900 px-2 py-1 text-[11px] font-medium text-zinc-100 transition hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              >
+                {downloadLoading ? "\u2026" : <ImageIcon className="h-3 w-3" />}
+                {downloadLoading ? "Rendering\u2026" : "PNG"}
+              </button>
             </div>
           </div>
 
