@@ -3,6 +3,7 @@
 import { useState, useReducer, useEffect, useMemo, useRef, startTransition } from "react";
 import { configToQueryParams, validateConfig, configToJSON, jsonToConfig, type CardConfig, type Size } from "@/lib/config-schema";
 import { registry } from "@/lib/templates/registry";
+import { presets } from "@/lib/presets";
 import { emptyGithubData } from "@/lib/templates/github-data";
 import type { GitHubData, ControlSchema } from "@/lib/templates/types";
 import type { Template } from "@/lib/templates/types";
@@ -26,7 +27,8 @@ type BuilderAction =
   | { type: "SET_VIEW_MODE"; value: "ui" | "advanced" | "json" }
   | { type: "SET_JSON_TEXT"; value: string }
   | { type: "SET_JSON_ERROR"; value: string | null }
-  | { type: "APPLY_JSON"; json: string };
+  | { type: "APPLY_JSON"; json: string }
+  | { type: "APPLY_PRESET"; preset: { template: string; colors: { background: string; accent: string; title: string; description: string }; advanced?: Record<string, unknown> } };
 
 function reducer(state: { config: CardConfig; githubData: GitHubData | null; loading: boolean; repoList: Array<{ name: string; description: string | null }> }, action: BuilderAction) {
   switch (action.type) {
@@ -106,6 +108,18 @@ case "RESET_TO_TEMPLATE_DEFAULTS":
       } catch {
         return state;
       }
+    case "APPLY_PRESET": {
+      const { preset } = action;
+      return {
+        ...state,
+        config: {
+          ...state.config,
+          template: preset.template,
+          colors: { ...preset.colors },
+          advanced: { ...state.config.advanced, ...preset.advanced },
+        },
+      };
+    }
     default:
       return state;
   }
@@ -409,6 +423,39 @@ export default function BuilderPage() {
                   {ghData.stats.stars != null && <span>\u2605 {ghData.stats.stars}</span>}
                 </div>
               )}
+            </div>
+          </section>
+
+          {/* Section: Presets */}
+          <section>
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">Presets</h2>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">
+              {presets.map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => dispatch({ type: "APPLY_PRESET", preset })}
+                  className="group flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white p-2.5 text-left transition hover:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:border-zinc-500"
+                >
+                  {/* Color preview bars */}
+                  <div className="flex h-8 gap-0.5 overflow-hidden rounded-md">
+                    <div className="flex-1" style={{ backgroundColor: preset.colors.background }} />
+                    <div className="flex-1" style={{ backgroundColor: preset.colors.accent }} />
+                    <div className="flex-1" style={{ backgroundColor: preset.colors.title }} />
+                    <div className="flex-1" style={{ backgroundColor: preset.colors.description }} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{preset.name}</span>
+                    <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
+                      preset.tag === "dark" ? "bg-zinc-900 text-zinc-200"
+                        : preset.tag === "light" ? "bg-zinc-100 text-zinc-600"
+                          : "bg-violet-100 text-violet-700"
+                    }`}>
+                      {preset.tag}
+                    </span>
+                  </div>
+                  <p className="text-[11px] leading-snug text-zinc-400">{preset.description}</p>
+                </button>
+              ))}
             </div>
           </section>
 
